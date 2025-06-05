@@ -17,13 +17,18 @@ from mediapipe.tasks.python.vision import (
     PoseLandmarker,
     HandLandmarkerOptions,
     PoseLandmarkerOptions,
-    RunningMode
+    RunningMode,
+    FaceLandmarker,
+    FaceLandmarkerOptions
 )
 from multiprocessing import Manager, set_start_method
+
+from athena.face_helper import crop_face_by_average_landmarks, draw_face_landmarks_on_image, map_landmarks_to_original, draw_mapped_face_landmarks_on_image
 
 models_dir = os.path.join(os.path.dirname(__file__), "models")
 hand_model_path = os.path.join(models_dir, "hand_landmarker.task")
 pose_model_path = os.path.join(models_dir, "pose_landmarker_full.task")
+face_model_path = os.path.join(models_dir, "face_landmarker.task")
 
 
 def createvideo(image_folder, extension, fps, output_folder, video_name):
@@ -266,6 +271,8 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     kpts_cam_r_world_file = os.path.join(data_save_path, '2Dworldlandmarks_right.npy')
     kpts_body_world_file = os.path.join(data_save_path, '2Dworldlandmarks_body.npy')
     confidence_hand_file = os.path.join(data_save_path, 'handedness_score.npy')
+    kpts_face_file = os.path.join(data_save_path, '2Dlandmarks_face.npy')
+
 
     # Prepare lists to store keypoints
     kpts_cam_l = []
@@ -275,6 +282,7 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     kpts_cam_r_world = []
     kpts_body_world = []
     handscore = []
+    kpts_face = []
 
     # Set GPU delegate based on user selection
     delegate = mp.tasks.BaseOptions.Delegate.GPU if use_gpu else mp.tasks.BaseOptions.Delegate.CPU
@@ -293,6 +301,13 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
         min_pose_detection_confidence=pose_confidence,
         min_pose_presence_confidence=pose_confidence,
         min_tracking_confidence=pose_confidence
+    )
+    face_options = FaceLandmarkerOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=face_model_path, delegate=delegate),
+        running_mode=RunningMode.VIDEO,
+        min_face_detection_confidence=0.3,
+        min_face_presence_confidence=0.3,
+        min_tracking_confidence=0.3,
     )
 
     # Create PyAV container and video stream
@@ -314,10 +329,12 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     # Initialize HandLandmarker and PoseLandmarker for this camera
     hand_landmarker = HandLandmarker.create_from_options(hand_options)
     pose_landmarker = PoseLandmarker.create_from_options(pose_options)
+    face_landmarker = FaceLandmarker.create_from_options(face_options)
 
     # Define expected lengths
     num_hand_keypoints = 21
     num_body_keypoints = 33
+    num_face_keypoints = 478
 
     # Start time for processing FPS calculation
     start_time = time.time()
@@ -342,6 +359,7 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
         # Undistort image using precomputed maps
         map1, map2 = undistort_map
         frame_array = cv.remap(frame_array, map1, map2, interpolation=cv.INTER_LINEAR)
+        frame_array_copy = frame_array.copy()
 
         # Convert to RGBA if using GPU
         if use_gpu:
@@ -451,6 +469,38 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
 
                 # Draw pose landmarks on the image
                 frame_array = draw_pose_landmarks_on_image(frame_array, pose_results)
+        
+        # Face
+        frame_keypoints_face = []
+        if cam in [0, 2, 3] and pose_results.pose_landmarks:
+            print(f"[Face] Cam {cam} Frame {framenum}: Starting face detection.")
+
+            # 1. Crop the face region from the BGR frame
+            face_crop_bgr, transform_info = crop_face_by_average_landmarks(
+                frame_array_copy,
+                pose_results.pose_landmarks[0]
+            )
+
+            # 2. Convert the crop to RGB before handing it to MediaPipe
+            face_crop_rgb = cv.cvtColor(face_crop_bgr, cv.COLOR_BGR2RGB)
+            mp_image = mp.Image(
+                image_format=mp.ImageFormat.SRGB,
+                data=face_crop_rgb
+            )
+
+            # 3. Run face landmarker on the RGB crop
+            face_landmarker_result = face_landmarker.detect_for_video(mp_image, timestamp_ms)
+            print(f"[Face] Cam {cam} Frame {framenum}: Face detection successful, drawing landmarks.")
+
+            # 4. Map face‐landmark coordinates (normalized on 256×256) back to original frame
+            frame_keypoints_face = map_landmarks_to_original(
+                face_landmarker_result.face_landmarks,  # list of NormalizedLandmark
+                transform_info,
+                frame_array.shape
+            )
+            
+            # Draw face landmarks using the mapped coordinates
+            frame_array = draw_mapped_face_landmarks_on_image(frame_array, frame_keypoints_face)
 
         # Ensure correct number of keypoints by padding
         if len(frame_keypoints_l) < num_hand_keypoints:
@@ -464,6 +514,9 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
             frame_keypoints_body_world += [[-1, -1, -1, -1, -1]] * (
                 num_body_keypoints - len(frame_keypoints_body_world)
             )
+        if len(frame_keypoints_face) < num_face_keypoints:
+            frame_keypoints_face += [[-1, -1, -1, -1, -1]] * (num_face_keypoints - len(frame_keypoints_face))
+        
 
         # Append keypoints
         kpts_cam_l.append(frame_keypoints_l)
@@ -472,6 +525,7 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
         kpts_cam_l_world.append(frame_keypoints_l_world)
         kpts_cam_r_world.append(frame_keypoints_r_world)
         kpts_body_world.append(frame_keypoints_body_world)
+        kpts_face.append(frame_keypoints_face)
 
         # Handedness confidence
         handscore.append(frame_handscore)
@@ -513,6 +567,8 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     kpts_cam_r_world = np.array(kpts_cam_r_world)
     kpts_body_world = np.array(kpts_body_world)
     confidence_hand = np.array(handscore)
+    kpts_face = np.array(kpts_face)
+
 
     # Save the results to disk
     np.save(kpts_cam_l_file, kpts_cam_l)
@@ -522,10 +578,12 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     np.save(kpts_cam_r_world_file, kpts_cam_r_world)
     np.save(kpts_body_world_file, kpts_body_world)
     np.save(confidence_hand_file, confidence_hand)
+    np.save(kpts_face_file, kpts_face)
 
     # Release resources
     hand_landmarker.close()
     pose_landmarker.close()
+    face_landmarker.close()
     container.close()
 
     # Send a completion message for this camera
