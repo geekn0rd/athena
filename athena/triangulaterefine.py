@@ -192,8 +192,14 @@ def smooth3d(data3d, fps, centroid_frequency_cutoff=5, centroid_polyorder=3,
     for _ in range(iterations):
         # Aggressive low-pass filtering of hand centroids
         for hand_indices in [range(33, 54), range(54, 75)]:
-            # Compute centroid for each frame
-            centroids = np.nanmean(data3d_smoothed[:, hand_indices, :], axis=1)
+            # Compute centroid for each frame, handling empty or all-NaN slices
+            centroids = np.zeros((n_frames, 3))
+            for frame in range(n_frames):
+                hand_data = data3d_smoothed[frame, hand_indices, :]
+                if not np.all(np.isnan(hand_data)):
+                    centroids[frame] = np.nanmean(hand_data, axis=0)
+                else:
+                    centroids[frame] = np.nan
 
             # Handle NaNs in centroids
             nan_mask = np.isnan(centroids).any(axis=1)
@@ -217,9 +223,16 @@ def smooth3d(data3d, fps, centroid_frequency_cutoff=5, centroid_polyorder=3,
             for frame in range(n_frames):
                 if np.isnan(smoothed_centroids[frame]).any():
                     continue
-                original_centroid = np.nanmean(data3d_smoothed[frame, hand_indices, :], axis=0)
+                
+                # Calculate original centroid only if we have valid data
+                hand_data = data3d_smoothed[frame, hand_indices, :]
+                if np.all(np.isnan(hand_data)):
+                    continue
+                    
+                original_centroid = np.nanmean(hand_data, axis=0)
                 if np.isnan(original_centroid).any():
                     continue
+                    
                 shift = smoothed_centroids[frame] - original_centroid
                 data3d_smoothed[frame, hand_indices, :] += shift
 
@@ -533,38 +546,61 @@ def visualize_3d(p3ds, save_path=None):
         '#DDDDDD', '#DDDDDD', '#DDDDDD', '#DDDDDD',
         '#009988', '#009988',
         '#EE7733', '#EE7733',
+        # Right hand colors
         '#FDE7EF', '#FDE7EF', '#FDE7EF', '#FDE7EF',
         '#F589B1', '#F589B1', '#F589B1', '#F589B1',
         '#ED2B72', '#ED2B72', '#ED2B72', '#ED2B72',
         '#A50E45', '#A50E45', '#A50E45', '#A50E45',
         '#47061D', '#47061D', '#47061D', '#47061D',
+        # Left hand colors
         '#E5F6FF', '#E5F6FF', '#E5F6FF', '#E5F6FF',
         '#80D1FF', '#80D1FF', '#80D1FF', '#80D1FF',
         '#1AACFF', '#1AACFF', '#1AACFF', '#1AACFF',
         '#0072B3', '#0072B3', '#0072B3', '#0072B3',
-        '#00314D', '#00314D', '#00314D', '#00314D'
+        '#00314D', '#00314D', '#00314D', '#00314D',
+        # Face colors - using a mix of blues and purples for face mesh
+        *(['#9370DB'] * 100),  # Light purple for face contour
+        *(['#8A2BE2'] * 100),  # Blue violet for face mesh
+        *(['#4B0082'] * 100),  # Indigo for remaining connections
     ]
 
     links = [
         [11, 12], [11, 23], [12, 24], [23, 24],
         [11, 13], [13, 15],
         [12, 14], [14, 16],
+        # Right hand
         [33, 34], [34, 35], [35, 36], [36, 37],
         [33, 38], [38, 39], [39, 40], [40, 41],
         [33, 42], [42, 43], [43, 44], [44, 45],
         [33, 46], [46, 47], [47, 48], [48, 49],
         [33, 50], [50, 51], [51, 52], [52, 53],
+        # Left hand
         [54, 55], [55, 56], [56, 57], [57, 58],
         [54, 59], [59, 60], [60, 61], [61, 62],
         [54, 63], [63, 64], [64, 65], [65, 66],
         [54, 67], [67, 68], [68, 69], [69, 70],
-        [54, 71], [71, 72], [72, 73], [73, 74]
+        [54, 71], [71, 72], [72, 73], [73, 74],
+        # Face mesh connections - adding key facial feature connections
+        # Face contour
+        *[[75+i, 75+i+1] for i in range(0, 16)],  # Jaw line
+        *[[75+i, 75+i+1] for i in range(17, 21)],  # Right eyebrow
+        *[[75+i, 75+i+1] for i in range(22, 26)],  # Left eyebrow
+        *[[75+i, 75+i+1] for i in range(27, 30)],  # Nose bridge
+        *[[75+i, 75+i+1] for i in range(31, 35)],  # Nose bottom
+        *[[75+i, 75+i+1] for i in range(36, 41)],  # Right eye
+        [75+41, 75+36],  # Complete right eye loop
+        *[[75+i, 75+i+1] for i in range(42, 47)],  # Left eye
+        [75+47, 75+42],  # Complete left eye loop
+        *[[75+i, 75+i+1] for i in range(48, 59)],  # Outer lip
+        [75+59, 75+48],  # Complete outer lip loop
+        *[[75+i, 75+i+1] for i in range(60, 67)],  # Inner lip
+        [75+67, 75+60],  # Complete inner lip loop
     ]
 
-    # Determine range of visualization (based on mid 50th percentile of the hands)
+    # Determine range of visualization (based on mid 50th percentile of all landmarks)
     percentile = 50 / 2
-    datalow = np.min(np.nanpercentile(p3ds[:, 33:74, :], percentile, axis=0), axis=0)
-    datahigh = np.max(np.nanpercentile(p3ds[:, 33:74, :], 100 - percentile, axis=0), axis=0)
+    datalow = np.min(np.nanpercentile(p3ds, percentile, axis=0), axis=0)
+    datahigh = np.max(np.nanpercentile(p3ds, 100 - percentile, axis=0), axis=0)
     dataint = datahigh - datalow
     datamid = (dataint / 2) + datalow
     largestint = np.max(dataint)
@@ -572,7 +608,7 @@ def visualize_3d(p3ds, save_path=None):
     upperlim = datamid + largestint
 
     # Generate figure
-    fig = plt.figure()
+    fig = plt.figure(figsize=(12, 12))
     ax = fig.add_subplot(111, projection='3d')
     ax.set_xlim3d([lowerlim[0], upperlim[0]])
     ax.set_ylim3d([lowerlim[1], upperlim[1]])
@@ -582,7 +618,7 @@ def visualize_3d(p3ds, save_path=None):
     ax.set_zlabel('Z')
     ax.view_init(-60, -50)
 
-    lines = [ax.plot([], [], [], linewidth=5, color=colours[i], alpha=0.7)[0] for i in range(len(links))]
+    lines = [ax.plot([], [], [], linewidth=2, color=colours[i], alpha=0.7)[0] for i in range(len(links))]
     scatter = ax.scatter([], [], [], marker='o', s=10, lw=1, c='white', edgecolors='black', alpha=0.7)
 
     for framenum in tqdm(range(len(p3ds))):
@@ -591,9 +627,10 @@ def visualize_3d(p3ds, save_path=None):
                           [p3ds[framenum, link[0], 1], p3ds[framenum, link[1], 1]])
             line.set_3d_properties([p3ds[framenum, link[0], 2], p3ds[framenum, link[1], 2]])
 
-        scatter._offsets3d = (p3ds[framenum, 33:75, 0],
-                              p3ds[framenum, 33:75, 1],
-                              p3ds[framenum, 33:75, 2])
+        # Update scatter plot with all landmarks (including face)
+        scatter._offsets3d = (p3ds[framenum, :, 0],
+                            p3ds[framenum, :, 1],
+                            p3ds[framenum, :, 2])
 
         if save_path is not None:
             plt.savefig(save_path.format(framenum), dpi=100)
@@ -633,18 +670,21 @@ def main(gui_options_json):
         data_2d_right = []
         data_2d_left = []
         data_2d_body = []
+        data_2d_face = []  # Add face data array
         landmarkfiles = sorted([d for d in glob.glob(trial + '/*') if os.path.isdir(d)])
         for cam in range(ncams):
             data_2d_right.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_right.npy')[0]).astype(float))
             data_2d_left.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_left.npy')[0]).astype(float))
             data_2d_body.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_body.npy')[0]).astype(float))
+            data_2d_face.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_face.npy')[0]).astype(float))  # Load face landmarks
         data_2d_right = np.stack(data_2d_right)
         data_2d_left = np.stack(data_2d_left)
         data_2d_body = np.stack(data_2d_body)
+        data_2d_face = np.stack(data_2d_face)  # Stack face data
 
         # Combine data
         data_2d_combined = np.concatenate(
-            (data_2d_body[:, :, :, :2], data_2d_right[:, :, :, :2], data_2d_left[:, :, :, :2]), axis=2
+            (data_2d_body[:, :, :, :2], data_2d_right[:, :, :, :2], data_2d_left[:, :, :, :2], data_2d_face[:, :, :, :2]), axis=2
         )
 
         # Video parameters

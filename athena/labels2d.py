@@ -30,6 +30,10 @@ hand_model_path = os.path.join(models_dir, "hand_landmarker.task")
 pose_model_path = os.path.join(models_dir, "pose_landmarker_full.task")
 face_model_path = os.path.join(models_dir, "face_landmarker.task")
 
+# Constants for number of keypoints
+num_hand_keypoints = 21
+num_body_keypoints = 33
+num_face_keypoints = 478  # MediaPipe face mesh has 478 landmarks
 
 def createvideo(image_folder, extension, fps, output_folder, video_name):
     """
@@ -305,9 +309,9 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     face_options = FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=face_model_path, delegate=delegate),
         running_mode=RunningMode.VIDEO,
-        min_face_detection_confidence=0.3,
-        min_face_presence_confidence=0.3,
-        min_tracking_confidence=0.3,
+        min_face_detection_confidence=0.2,
+        min_face_presence_confidence=0.2,
+        min_tracking_confidence=0.2,
     )
 
     # Create PyAV container and video stream
@@ -330,11 +334,6 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     hand_landmarker = HandLandmarker.create_from_options(hand_options)
     pose_landmarker = PoseLandmarker.create_from_options(pose_options)
     face_landmarker = FaceLandmarker.create_from_options(face_options)
-
-    # Define expected lengths
-    num_hand_keypoints = 21
-    num_body_keypoints = 33
-    num_face_keypoints = 478
 
     # Start time for processing FPS calculation
     start_time = time.time()
@@ -501,6 +500,16 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
             
             # Draw face landmarks using the mapped coordinates
             frame_array = draw_mapped_face_landmarks_on_image(frame_array, frame_keypoints_face)
+
+        # Ensure face keypoints have consistent shape
+        if not frame_keypoints_face:  # If no face detected
+            frame_keypoints_face = [[-1, -1, -1, -1, -1] for _ in range(num_face_keypoints)]
+        else:
+            # Convert the face keypoints to the same format as other landmarks
+            temp_keypoints = []
+            for x, y in frame_keypoints_face[0]:  # Use first face if multiple detected
+                temp_keypoints.append([int(x), int(y), 0, 1, 1])  # Adding z, visibility, and presence
+            frame_keypoints_face = temp_keypoints
 
         # Ensure correct number of keypoints by padding
         if len(frame_keypoints_l) < num_hand_keypoints:
