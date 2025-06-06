@@ -464,7 +464,6 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
         eye_landmarks = detector.get_eye_landmarks(frame_array_copy)
         
         if eye_landmarks:  # Only process if landmarks were found
-            print(f"[Eye Detection] Cam {cam}, Frame {framenum}, Face {eye_landmarks}")
             for face_data in eye_landmarks:
                 # Convert eye landmarks to our standard format
                 right_eye = face_data['right_eye']

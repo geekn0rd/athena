@@ -192,14 +192,8 @@ def smooth3d(data3d, fps, centroid_frequency_cutoff=5, centroid_polyorder=3,
     for _ in range(iterations):
         # Aggressive low-pass filtering of hand centroids
         for hand_indices in [range(33, 54), range(54, 75)]:
-            # Compute centroid for each frame, handling empty or all-NaN slices
-            centroids = np.zeros((n_frames, 3))
-            for frame in range(n_frames):
-                hand_data = data3d_smoothed[frame, hand_indices, :]
-                if not np.all(np.isnan(hand_data)):
-                    centroids[frame] = np.nanmean(hand_data, axis=0)
-                else:
-                    centroids[frame] = np.nan
+            # Compute centroid for each frame
+            centroids = np.nanmean(data3d_smoothed[:, hand_indices, :], axis=1)
 
             # Handle NaNs in centroids
             nan_mask = np.isnan(centroids).any(axis=1)
@@ -214,7 +208,8 @@ def smooth3d(data3d, fps, centroid_frequency_cutoff=5, centroid_polyorder=3,
                     data_valid = data[valid_mask]
                     indices = np.arange(len(data))
                     data_interp = np.interp(indices, indices[valid_mask], data_valid)
-                    data_filtered = np.interp(indices, indices[valid_mask], data_interp)
+                    data_filtered = savgol_filter(data_interp, window_length=centroid_window_length,
+                                                  polyorder=centroid_polyorder)
                     data_filtered = restore_long_nan_runs(data, data_filtered, min_length=5)
                     smoothed_centroids[:, coord] = data_filtered
 
@@ -222,16 +217,9 @@ def smooth3d(data3d, fps, centroid_frequency_cutoff=5, centroid_polyorder=3,
             for frame in range(n_frames):
                 if np.isnan(smoothed_centroids[frame]).any():
                     continue
-                
-                # Calculate original centroid only if we have valid data
-                hand_data = data3d_smoothed[frame, hand_indices, :]
-                if np.all(np.isnan(hand_data)):
-                    continue
-                    
-                original_centroid = np.nanmean(hand_data, axis=0)
+                original_centroid = np.nanmean(data3d_smoothed[frame, hand_indices, :], axis=0)
                 if np.isnan(original_centroid).any():
                     continue
-                    
                 shift = smoothed_centroids[frame] - original_centroid
                 data3d_smoothed[frame, hand_indices, :] += shift
 
@@ -246,7 +234,8 @@ def smooth3d(data3d, fps, centroid_frequency_cutoff=5, centroid_polyorder=3,
                 data_valid = data[valid_mask]
                 indices = np.arange(len(data))
                 data_interp = np.interp(indices, indices[valid_mask], data_valid)
-                data_filtered = np.interp(indices, indices[valid_mask], data_interp)
+                data_filtered = savgol_filter(data_interp, window_length=point_window_length,
+                                              polyorder=point_polyorder)
                 data_filtered = restore_long_nan_runs(data, data_filtered, min_length=5)
                 data3d_smoothed[:, landmark, coord] = data_filtered
 
@@ -439,47 +428,48 @@ def process_camera(cam, input_stream, data, display_width, display_height, outdi
         stream = container.streams.video[0]
         stream.thread_type = 'AUTO'
 
-        colours = [
-            '#DDDDDD', '#DDDDDD', '#DDDDDD', '#DDDDDD',
+        colors = [
+            '#009988', '#009988', '#009988', '#009988',
+            '#EE7733', '#EE7733', '#EE7733', '#EE7733',
+            '#DDDDDD', '#DDDDDD', '#DDDDDD', '#DDDDDD', '#DDDDDD',
             '#009988', '#009988',
             '#EE7733', '#EE7733',
-            # Right hand colors
+            # Right eye (green)
+            '#00FF00', '#00FF00', '#00FF00', '#00FF00', '#00FF00', '#00FF00',
+            # Left eye (blue)
+            '#0000FF', '#0000FF', '#0000FF', '#0000FF', '#0000FF', '#0000FF',
             '#FDE7EF', '#FDE7EF', '#FDE7EF', '#FDE7EF',
             '#F589B1', '#F589B1', '#F589B1', '#F589B1',
             '#ED2B72', '#ED2B72', '#ED2B72', '#ED2B72',
             '#A50E45', '#A50E45', '#A50E45', '#A50E45',
             '#47061D', '#47061D', '#47061D', '#47061D',
-            # Left hand colors
             '#E5F6FF', '#E5F6FF', '#E5F6FF', '#E5F6FF',
             '#80D1FF', '#80D1FF', '#80D1FF', '#80D1FF',
             '#1AACFF', '#1AACFF', '#1AACFF', '#1AACFF',
             '#0072B3', '#0072B3', '#0072B3', '#0072B3',
-            '#00314D', '#00314D', '#00314D', '#00314D',
-            # Eye colors
-            '#9370DB', '#9370DB',  # Right eye
-            '#8A2BE2', '#8A2BE2'   # Left eye
+            '#00314D', '#00314D', '#00314D', '#00314D'
         ]
 
         links = [
-            [11, 12], [11, 23], [12, 24], [23, 24],
+            [0, 1], [1, 2], [2, 3], [3, 7],
+            [0, 4], [4, 5], [5, 6], [6, 8],
+            [9, 10], [11, 12], [11, 23], [12, 24], [23, 24],
             [11, 13], [13, 15],
             [12, 14], [14, 16],
-            # Right hand
+            # Right eye (connecting in a loop)
+            [75, 76], [76, 77], [77, 78], [78, 79], [79, 80], [80, 75],
+            # Left eye (connecting in a loop)
+            [81, 82], [82, 83], [83, 84], [84, 85], [85, 86], [86, 81],
             [33, 34], [34, 35], [35, 36], [36, 37],
             [33, 38], [38, 39], [39, 40], [40, 41],
             [33, 42], [42, 43], [43, 44], [44, 45],
             [33, 46], [46, 47], [47, 48], [48, 49],
             [33, 50], [50, 51], [51, 52], [52, 53],
-            # Left hand
             [54, 55], [55, 56], [56, 57], [57, 58],
             [54, 59], [59, 60], [60, 61], [61, 62],
             [54, 63], [63, 64], [64, 65], [65, 66],
             [54, 67], [67, 68], [68, 69], [69, 70],
-            [54, 71], [71, 72], [72, 73], [73, 74],
-            # Right eye (points 75-80)
-            [75, 76], [76, 77], [77, 78], [78, 79], [79, 80], [80, 75],
-            # Left eye (points 81-86)
-            [81, 82], [82, 83], [83, 84], [84, 85], [85, 86], [86, 81]
+            [54, 71], [71, 72], [72, 73], [73, 74]
         ]
 
         for framenum, packet in enumerate(container.demux(stream)):
@@ -492,7 +482,7 @@ def process_camera(cam, input_stream, data, display_width, display_height, outdi
                         if not np.isnan(data[cam, framenum, [start, end], 0]).any():
                             posn_start = tuple(data[cam, framenum, start, :2].astype(int))
                             posn_end = tuple(data[cam, framenum, end, :2].astype(int))
-                            cv.line(img, posn_start, posn_end, hex2bgr(colours[number]), 2)
+                            cv.line(img, posn_start, posn_end, hex2bgr(colors[number]), 2)
 
                     for landmark in range(21):
                         if not np.isnan(data[cam, framenum, landmark, 0]):
@@ -546,60 +536,63 @@ def visualize_3d(p3ds, save_path=None):
         p3ds (np.ndarray): 3D points, shape (n_frames, n_landmarks, 3).
         save_path (str, optional): If provided, saves the images to the specified path format.
     """
-    print("[3D Visualization] Starting visualization process...")
-    print(f"[3D Visualization] Data shape: {p3ds.shape}")
-    
-    # Check if we have any valid data
-    if np.all(np.isnan(p3ds)):
-        print("[3D Visualization] ERROR: All data points are NaN. Cannot visualize.")
-        return
-    
-    # Get valid (non-NaN) points for range calculation
-    valid_points = p3ds[~np.isnan(p3ds).any(axis=2)]
-    if len(valid_points) == 0:
-        print("[3D Visualization] ERROR: No valid points found for visualization.")
-        return
-        
-    print(f"[3D Visualization] Number of valid points: {len(valid_points)}")
-    
-    # Calculate visualization range using only valid points
-    datalow = np.percentile(valid_points, 25, axis=0)
-    datahigh = np.percentile(valid_points, 75, axis=0)
-    dataint = datahigh - datalow
-    datamid = (dataint / 2) + datalow
-    largestint = np.max(dataint)
-    
-    # Add some padding to the range
-    padding = largestint * 0.1
-    lowerlim = datamid - largestint - padding
-    upperlim = datamid + largestint + padding
-    
-    print(f"[3D Visualization] Visualization range: X[{lowerlim[0]:.2f}, {upperlim[0]:.2f}], Y[{lowerlim[1]:.2f}, {upperlim[1]:.2f}], Z[{lowerlim[2]:.2f}, {upperlim[2]:.2f}]")
 
-    # Rest of the visualization code...
     colours = [
         '#DDDDDD', '#DDDDDD', '#DDDDDD', '#DDDDDD',
         '#009988', '#009988',
         '#EE7733', '#EE7733',
-        # Right hand colors
+        # Right eye (6 points)
+        '#00FF00', '#00FF00', '#00FF00', '#00FF00', '#00FF00', '#00FF00',
+        # Left eye (6 points)
+        '#0000FF', '#0000FF', '#0000FF', '#0000FF', '#0000FF', '#0000FF',
+        # Right hand
         '#FDE7EF', '#FDE7EF', '#FDE7EF', '#FDE7EF',
         '#F589B1', '#F589B1', '#F589B1', '#F589B1',
         '#ED2B72', '#ED2B72', '#ED2B72', '#ED2B72',
         '#A50E45', '#A50E45', '#A50E45', '#A50E45',
         '#47061D', '#47061D', '#47061D', '#47061D',
-        # Left hand colors
+        # Left hand
         '#E5F6FF', '#E5F6FF', '#E5F6FF', '#E5F6FF',
         '#80D1FF', '#80D1FF', '#80D1FF', '#80D1FF',
         '#1AACFF', '#1AACFF', '#1AACFF', '#1AACFF',
         '#0072B3', '#0072B3', '#0072B3', '#0072B3',
-        '#00314D', '#00314D', '#00314D', '#00314D',
-        # Eye colors
-        '#9370DB', '#9370DB',  # Right eye
-        '#8A2BE2', '#8A2BE2'   # Left eye
+        '#00314D', '#00314D', '#00314D', '#00314D'
     ]
 
+    links = [
+        [11, 12], [11, 23], [12, 24], [23, 24],
+        [11, 13], [13, 15],
+        [12, 14], [14, 16],
+        # Right eye (connecting in a loop)
+        [75, 76], [76, 77], [77, 78], [78, 79], [79, 80], [80, 75],
+        # Left eye (connecting in a loop)
+        [81, 82], [82, 83], [83, 84], [84, 85], [85, 86], [86, 81],
+        # Right hand
+        [33, 34], [34, 35], [35, 36], [36, 37],
+        [33, 38], [38, 39], [39, 40], [40, 41],
+        [33, 42], [42, 43], [43, 44], [44, 45],
+        [33, 46], [46, 47], [47, 48], [48, 49],
+        [33, 50], [50, 51], [51, 52], [52, 53],
+        # Left hand
+        [54, 55], [55, 56], [56, 57], [57, 58],
+        [54, 59], [59, 60], [60, 61], [61, 62],
+        [54, 63], [63, 64], [64, 65], [65, 66],
+        [54, 67], [67, 68], [68, 69], [69, 70],
+        [54, 71], [71, 72], [72, 73], [73, 74]
+    ]
+
+    # Determine range of visualization (based on mid 50th percentile of the hands)
+    percentile = 50 / 2
+    datalow = np.min(np.nanpercentile(p3ds[:, 33:74, :], percentile, axis=0), axis=0)
+    datahigh = np.max(np.nanpercentile(p3ds[:, 33:74, :], 100 - percentile, axis=0), axis=0)
+    dataint = datahigh - datalow
+    datamid = (dataint / 2) + datalow
+    largestint = np.max(dataint)
+    lowerlim = datamid - largestint
+    upperlim = datamid + largestint
+
     # Generate figure
-    fig = plt.figure(figsize=(12, 12))
+    fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.set_xlim3d([lowerlim[0], upperlim[0]])
     ax.set_ylim3d([lowerlim[1], upperlim[1]])
@@ -609,42 +602,24 @@ def visualize_3d(p3ds, save_path=None):
     ax.set_zlabel('Z')
     ax.view_init(-60, -50)
 
-    lines = [ax.plot([], [], [], linewidth=2, color=colours[i], alpha=0.7)[0] for i in range(len(links))]
+    lines = [ax.plot([], [], [], linewidth=5, color=colours[i], alpha=0.7)[0] for i in range(len(links))]
     scatter = ax.scatter([], [], [], marker='o', s=10, lw=1, c='white', edgecolors='black', alpha=0.7)
 
-    print("[3D Visualization] Processing frames...")
     for framenum in tqdm(range(len(p3ds))):
-        valid_frame = False
         for linknum, (link, line) in enumerate(zip(links, lines)):
-            # Check if both points of the link are valid
-            if not np.isnan(p3ds[framenum, link[0]]).any() and not np.isnan(p3ds[framenum, link[1]]).any():
-                valid_frame = True
-                line.set_data([p3ds[framenum, link[0], 0], p3ds[framenum, link[1], 0]],
-                            [p3ds[framenum, link[0], 1], p3ds[framenum, link[1], 1]])
-                line.set_3d_properties([p3ds[framenum, link[0], 2], p3ds[framenum, link[1], 2]])
-            else:
-                line.set_data([], [])
-                line.set_3d_properties([])
+            line.set_data([p3ds[framenum, link[0], 0], p3ds[framenum, link[1], 0]],
+                          [p3ds[framenum, link[0], 1], p3ds[framenum, link[1], 1]])
+            line.set_3d_properties([p3ds[framenum, link[0], 2], p3ds[framenum, link[1], 2]])
 
-        # Update scatter plot with only valid points
-        valid_points_mask = ~np.isnan(p3ds[framenum]).any(axis=1)
-        if np.any(valid_points_mask):
-            valid_frame = True
-            scatter._offsets3d = (p3ds[framenum, valid_points_mask, 0],
-                                p3ds[framenum, valid_points_mask, 1],
-                                p3ds[framenum, valid_points_mask, 2])
+        scatter._offsets3d = (p3ds[framenum, 33:75, 0],
+                              p3ds[framenum, 33:75, 1],
+                              p3ds[framenum, 33:75, 2])
+
+        if save_path is not None:
+            plt.savefig(save_path.format(framenum), dpi=100)
         else:
-            scatter._offsets3d = ([], [], [])
+            plt.pause(0.01)
 
-        if valid_frame:
-            if save_path is not None:
-                plt.savefig(save_path.format(framenum), dpi=100)
-                if framenum % 100 == 0:
-                    print(f"[3D Visualization] Saved frame {framenum}")
-            else:
-                plt.pause(0.01)
-
-    print("[3D Visualization] Visualization complete.")
     plt.close(fig)
 
 
@@ -678,39 +653,28 @@ def main(gui_options_json):
         data_2d_right = []
         data_2d_left = []
         data_2d_body = []
-        data_2d_eyes = []  # Changed from face to eyes
+        data_2d_face = []  # Add face data array
         landmarkfiles = sorted([d for d in glob.glob(trial + '/*') if os.path.isdir(d)])
         for cam in range(ncams):
             data_2d_right.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_right.npy')[0]).astype(float))
             data_2d_left.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_left.npy')[0]).astype(float))
             data_2d_body.append(np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_body.npy')[0]).astype(float))
-            
-            # Load eye landmarks
-            eye_data = np.load(glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_face.npy')[0]).astype(float)
-            # Extract only the eye points (6 points per eye)
-            right_eye = eye_data[:, :6, :]  # First 6 points for right eye
-            left_eye = eye_data[:, 6:12, :]  # Next 6 points for left eye
-            eyes_combined = np.concatenate([right_eye, left_eye], axis=1)
-            data_2d_eyes.append(eyes_combined)
-            
+            face_file = glob.glob(landmarkfiles[cam] + '/*2Dlandmarks_face.npy')
+            if face_file:
+                data_2d_face.append(np.load(face_file[0]).astype(float))
+            else:
+                # Create empty face data with same frame count as body data
+                empty_face = np.full((data_2d_body[-1].shape[0], 12, 2), -1)  # 12 eye landmarks (6 per eye)
+                data_2d_face.append(empty_face)
         data_2d_right = np.stack(data_2d_right)
         data_2d_left = np.stack(data_2d_left)
         data_2d_body = np.stack(data_2d_body)
-        data_2d_eyes = np.stack(data_2d_eyes)
-
-        print(f"[Data Loading] Shapes:")
-        print(f"  Body: {data_2d_body.shape}")
-        print(f"  Right hand: {data_2d_right.shape}")
-        print(f"  Left hand: {data_2d_left.shape}")
-        print(f"  Eyes: {data_2d_eyes.shape}")
+        data_2d_face = np.stack(data_2d_face)
 
         # Combine data
         data_2d_combined = np.concatenate(
-            (data_2d_body[:, :, :, :2], data_2d_right[:, :, :, :2], 
-             data_2d_left[:, :, :, :2], data_2d_eyes[:, :, :, :2]), axis=2
+            (data_2d_body[:, :, :, :2], data_2d_right[:, :, :, :2], data_2d_left[:, :, :, :2], data_2d_face[:, :, :, :2]), axis=2
         )
-        
-        print(f"[Data Loading] Combined shape: {data_2d_combined.shape}")
 
         # Video parameters
         nframes = data_2d_combined.shape[1]
@@ -744,34 +708,17 @@ def main(gui_options_json):
 
         # Triangulate to 3D
         npoints = data_2d_undistort.shape[1]
-        print(f"[Triangulation] Starting 3D triangulation for {npoints} points")
         data3d = np.empty((npoints, 3))
         data3d[:] = np.nan
-        
-        valid_points = 0
         for point in range(npoints):
             subp = data_2d_undistort[:, point, :]
             good = ~np.isnan(subp[:, 0])
-            num_good_cameras = np.sum(good)
-            
-            if num_good_cameras >= 2:
-                try:
-                    data3d[point] = triangulate_simple(subp[good], cam_mats_extrinsic[good])
-                    valid_points += 1
-                    if point % 100 == 0:  # Log progress every 100 points
-                        print(f"[Triangulation] Processed point {point}/{npoints} ({num_good_cameras} cameras)")
-                except Exception as e:
-                    print(f"[Triangulation] Error triangulating point {point}: {str(e)}")
-            else:
-                if point % 100 == 0:  # Log every 100th point to avoid spam
-                    print(f"[Triangulation] Point {point}: Only {num_good_cameras} valid cameras (need >= 2)")
-        
-        print(f"[Triangulation] Successfully triangulated {valid_points}/{npoints} points ({(valid_points/npoints*100):.1f}%)")
-        
+            if np.sum(good) >= 2:
+                data3d[point] = triangulate_simple(subp[good], cam_mats_extrinsic[good])
+
         # Reshape to frames x landmarks x 3
         data3d = data3d.reshape((int(len(data3d) / nlandmarks), nlandmarks, 3))
-        print(f"[Triangulation] Reshaped data to {data3d.shape} (frames x landmarks x 3)")
-        
+
         # Get FPS from video
         vidnames = sorted(glob.glob(os.path.join(main_folder, 'videos', trialname, '*.avi')))
         container = av.open(vidnames[0])
@@ -781,13 +728,11 @@ def main(gui_options_json):
         else:
             fps = 30.0
         container.close()
-        
-        print("[Triangulation] Starting 3D data smoothing...")
+
         # Smooth 3D data
         data3d = smooth3d(data3d, fps=fps,
                           centroid_frequency_cutoff=gui_options['hand_centroid_lfc'],
                           point_frequency_cutoff=gui_options['all_landmarks_lfc'])
-        print("[Triangulation] 3D data smoothing complete")
 
         # Re-flatten
         data3d = data3d.reshape(-1, 3)
