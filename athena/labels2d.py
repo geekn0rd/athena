@@ -17,13 +17,10 @@ from mediapipe.tasks.python.vision import (
     PoseLandmarker,
     HandLandmarkerOptions,
     PoseLandmarkerOptions,
-    RunningMode,
-    FaceLandmarker,
-    FaceLandmarkerOptions
+    RunningMode
 )
 from multiprocessing import Manager, set_start_method
-
-from athena.face_helper import crop_face_by_average_landmarks, draw_face_landmarks_on_image, map_landmarks_to_original, draw_mapped_face_landmarks_on_image
+from eye_detector import EyeDetector
 
 models_dir = os.path.join(os.path.dirname(__file__), "models")
 hand_model_path = os.path.join(models_dir, "hand_landmarker.task")
@@ -33,7 +30,7 @@ face_model_path = os.path.join(models_dir, "face_landmarker.task")
 # Constants for number of keypoints
 num_hand_keypoints = 21
 num_body_keypoints = 33
-num_face_keypoints = 478  # MediaPipe face mesh has 478 landmarks
+num_face_keypoints = 68
 
 def createvideo(image_folder, extension, fps, output_folder, video_name):
     """
@@ -306,13 +303,6 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
         min_pose_presence_confidence=pose_confidence,
         min_tracking_confidence=pose_confidence
     )
-    face_options = FaceLandmarkerOptions(
-        base_options=mp.tasks.BaseOptions(model_asset_path=face_model_path, delegate=delegate),
-        running_mode=RunningMode.VIDEO,
-        min_face_detection_confidence=0.2,
-        min_face_presence_confidence=0.2,
-        min_tracking_confidence=0.2,
-    )
 
     # Create PyAV container and video stream
     container = av.open(input_stream)
@@ -333,7 +323,7 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     # Initialize HandLandmarker and PoseLandmarker for this camera
     hand_landmarker = HandLandmarker.create_from_options(hand_options)
     pose_landmarker = PoseLandmarker.create_from_options(pose_options)
-    face_landmarker = FaceLandmarker.create_from_options(face_options)
+    detector = EyeDetector(detection_threshold=0.6)  # Lower threshold for better detection
 
     # Start time for processing FPS calculation
     start_time = time.time()
@@ -470,47 +460,39 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
                 frame_array = draw_pose_landmarks_on_image(frame_array, pose_results)
         
         # Face
-        frame_keypoints_face = []
-        if cam in [0, 2, 3] and pose_results.pose_landmarks:
-            print(f"[Face] Cam {cam} Frame {framenum}: Starting face detection.")
-
-            # 1. Crop the face region from the BGR frame
-            face_crop_bgr, transform_info = crop_face_by_average_landmarks(
-                frame_array_copy,
-                pose_results.pose_landmarks[0]
-            )
-
-            # 2. Convert the crop to RGB before handing it to MediaPipe
-            face_crop_rgb = cv.cvtColor(face_crop_bgr, cv.COLOR_BGR2RGB)
-            mp_image = mp.Image(
-                image_format=mp.ImageFormat.SRGB,
-                data=face_crop_rgb
-            )
-
-            # 3. Run face landmarker on the RGB crop
-            face_landmarker_result = face_landmarker.detect_for_video(mp_image, timestamp_ms)
-            print(f"[Face] Cam {cam} Frame {framenum}: Face detection successful, drawing landmarks.")
-
-            # 4. Map face‐landmark coordinates (normalized on 256×256) back to original frame
-            frame_keypoints_face = map_landmarks_to_original(
-                face_landmarker_result.face_landmarks,  # list of NormalizedLandmark
-                transform_info,
-                frame_array.shape
-            )
-            
-            # Draw face landmarks using the mapped coordinates
-            frame_array = draw_mapped_face_landmarks_on_image(frame_array, frame_keypoints_face)
-
-        # Ensure face keypoints have consistent shape
-        if not frame_keypoints_face:  # If no face detected
-            frame_keypoints_face = [[-1, -1, -1, -1, -1] for _ in range(num_face_keypoints)]
-        else:
-            # Convert the face keypoints to the same format as other landmarks
-            temp_keypoints = []
-            for x, y in frame_keypoints_face[0]:  # Use first face if multiple detected
-                temp_keypoints.append([int(x), int(y), 0, 1, 1])  # Adding z, visibility, and presence
-            frame_keypoints_face = temp_keypoints
-
+        frame_keypoints_face = []  # Initialize empty list for face keypoints
+        eye_landmarks = detector.get_eye_landmarks(frame_array_copy)
+        
+        if eye_landmarks:  # Only process if landmarks were found
+            print(f"[Eye Detection] Cam {cam}, Frame {framenum}, Face {eye_landmarks}")
+            for face_data in eye_landmarks:
+                # Convert eye landmarks to our standard format
+                right_eye = face_data['right_eye']
+                left_eye = face_data['left_eye']
+                
+                # Add right eye landmarks
+                for point in right_eye:
+                    frame_keypoints_face.append([
+                        int(point[0]),
+                        int(point[1]),
+                        0,  # z-coordinate (not available)
+                        1,  # visibility
+                        1   # presence
+                    ])
+                
+                # Add left eye landmarks
+                for point in left_eye:
+                    frame_keypoints_face.append([
+                        int(point[0]),
+                        int(point[1]),
+                        0,  # z-coordinate (not available)
+                        1,  # visibility
+                        1   # presence
+                    ])
+        
+        # Optional: visualize the landmarks
+        detector.draw_landmarks(frame_array, eye_landmarks)
+        
         # Ensure correct number of keypoints by padding
         if len(frame_keypoints_l) < num_hand_keypoints:
             frame_keypoints_l += [[-1, -1, -1, -1, -1]] * (num_hand_keypoints - len(frame_keypoints_l))
@@ -592,7 +574,6 @@ def process_camera(cam, input_stream, gui_options, cam_mats_intrinsic, cam_dist_
     # Release resources
     hand_landmarker.close()
     pose_landmarker.close()
-    face_landmarker.close()
     container.close()
 
     # Send a completion message for this camera

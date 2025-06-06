@@ -3,7 +3,6 @@ import numpy as np
 
 from .TFLiteFaceDetection import UltraLightFaceDetecion
 from .TFLiteFaceAlignment import DenseFaceReconstruction, DepthFacialLandmarks
-from .CtypesMeshRender import TrianglesMeshRender
 
 
 def rotationMatrixToEulerAngles(R):
@@ -91,11 +90,6 @@ def dense(frame, results, color):
     landmarks = np.round(results[0]).astype(int)
     for p in landmarks[::6, :2]:
         cv2.circle(frame, tuple(p), 1, color, 0, cv2.LINE_AA)
-
-
-def mesh(frame, results, color):
-    landmarks = results[0].astype(np.float32)
-    color.render(landmarks.copy(), frame)
 
 
 def pose(frame, results, color):

@@ -16,6 +16,8 @@ class EyeDetector:
             landmark_model (str): Path to the facial landmark model
             detection_threshold (float): Confidence threshold for face detection
         """
+        print(f"[Eye Detector] Initializing with detection threshold: {detection_threshold}")
+        
         # Initialize face detector
         self.face_detector = service.UltraLightFaceDetecion(
             face_detection_model, 
@@ -24,6 +26,7 @@ class EyeDetector:
         
         # Initialize landmark detector
         self.landmark_detector = service.DepthFacialLandmarks(landmark_model)
+        print("[Eye Detector] Successfully initialized face and landmark detectors")
         
     def get_eye_landmarks(self, frame):
         """Extract eye landmarks from a frame.
@@ -38,21 +41,38 @@ class EyeDetector:
         # Detect faces
         boxes, scores = self.face_detector.inference(frame)
         
+        if len(boxes) == 0:
+            print("[Eye Detector] No faces detected in frame")
+            return []
+            
+        print(f"[Eye Detector] Detected {len(boxes)} faces with confidence scores: {[f'{s:.2f}' for s in scores]}")
+        
         # Store results for all faces
         all_eye_landmarks = []
         
         # Get landmarks for each face
-        for results in self.landmark_detector.get_landmarks(frame, boxes):
-            landmarks = np.round(results[0]).astype(int)
-            
-            # Extract eye landmarks
-            right_eye = landmarks[36:42]  # Right eye points (36-41)
-            left_eye = landmarks[42:48]   # Left eye points (42-47)
-            
-            all_eye_landmarks.append({
-                'right_eye': right_eye,
-                'left_eye': left_eye
-            })
+        for idx, (box, score) in enumerate(zip(boxes, scores)):
+            try:
+                results = self.landmark_detector.get_landmarks(frame, [box])
+                if not results:
+                    print(f"[Eye Detector] Failed to get landmarks for face {idx+1}")
+                    continue
+                    
+                landmarks = np.round(results[0]).astype(int)
+                
+                # Extract eye landmarks
+                right_eye = landmarks[36:42]  # Right eye points (36-41)
+                left_eye = landmarks[42:48]   # Left eye points (42-47)
+                
+                all_eye_landmarks.append({
+                    'right_eye': right_eye,
+                    'left_eye': left_eye
+                })
+                print(f"[Eye Detector] Successfully extracted landmarks for face {idx+1}")
+                
+            except Exception as e:
+                print(f"[Eye Detector] Error processing face {idx+1}: {str(e)}")
+                continue
             
         return all_eye_landmarks
     
