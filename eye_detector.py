@@ -53,16 +53,22 @@ class EyeDetector:
         # Get landmarks for each face
         for idx, (box, score) in enumerate(zip(boxes, scores)):
             try:
-                results = self.landmark_detector.get_landmarks(frame, [box])
+                # Convert generator to list to make it subscriptable
+                results = list(self.landmark_detector.get_landmarks(frame, [box]))
                 if not results:
-                    print(f"[Eye Detector] Failed to get landmarks for face {idx+1}")
+                    print(f"[Eye Detector] No landmarks found for face {idx+1}")
                     continue
-                    
-                landmarks = np.round(results[0]).astype(int)
+                
+                landmarks = np.round(results[0][0]).astype(int)  # Access first result's landmarks
                 
                 # Extract eye landmarks
                 right_eye = landmarks[36:42]  # Right eye points (36-41)
                 left_eye = landmarks[42:48]   # Left eye points (42-47)
+                
+                # Validate eye landmarks
+                if len(right_eye) != 6 or len(left_eye) != 6:
+                    print(f"[Eye Detector] Invalid number of eye landmarks for face {idx+1}")
+                    continue
                 
                 all_eye_landmarks.append({
                     'right_eye': right_eye,

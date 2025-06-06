@@ -743,8 +743,8 @@ def main(gui_options_json):
             ).reshape(len(data_2d[cam]), 2)
 
         # Triangulate to 3D
-        print(f"[Triangulation] Starting 3D triangulation for {npoints} points")
         npoints = data_2d_undistort.shape[1]
+        print(f"[Triangulation] Starting 3D triangulation for {npoints} points")
         data3d = np.empty((npoints, 3))
         data3d[:] = np.nan
         
@@ -758,13 +758,15 @@ def main(gui_options_json):
                 try:
                     data3d[point] = triangulate_simple(subp[good], cam_mats_extrinsic[good])
                     valid_points += 1
+                    if point % 100 == 0:  # Log progress every 100 points
+                        print(f"[Triangulation] Processed point {point}/{npoints} ({num_good_cameras} cameras)")
                 except Exception as e:
                     print(f"[Triangulation] Error triangulating point {point}: {str(e)}")
             else:
                 if point % 100 == 0:  # Log every 100th point to avoid spam
                     print(f"[Triangulation] Point {point}: Only {num_good_cameras} valid cameras (need >= 2)")
         
-        print(f"[Triangulation] Successfully triangulated {valid_points}/{npoints} points")
+        print(f"[Triangulation] Successfully triangulated {valid_points}/{npoints} points ({(valid_points/npoints*100):.1f}%)")
         
         # Reshape to frames x landmarks x 3
         data3d = data3d.reshape((int(len(data3d) / nlandmarks), nlandmarks, 3))
